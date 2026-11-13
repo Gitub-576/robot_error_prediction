@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from io import StringIO
 
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -20,7 +19,7 @@ DATA_URL = (
 
 SENSORS = ["Fx", "Fy", "Fz", "Tx", "Ty", "Tz"]
 
-# 사용자가 요청한 센서별 열 이름
+# 센서별 속성 이름
 FEATURE_COLUMNS = [
     f"{sensor}{i}"
     for sensor in SENSORS
@@ -41,35 +40,41 @@ def load_data():
         response = requests.get(DATA_URL, timeout=30)
         response.raise_for_status()
 
-        # 원본 파일은 헤더 없이 공백으로 구분되어 있음
-        raw = pd.read_csv(
-            StringIO(response.text),
-            sep=r"\s+",
-            header=None,
-            engine="python"
-        )
+        # 파일 전체를 공백 기준으로 분리
+        # 실제 LP1 파일은 Class 1개 + 센서값 90개가
+        # 여러 줄에 나누어 저장되어 있음
+        tokens = response.text.split()
 
-        # 실제 열 개수 검사
-        if raw.shape[1] != 91:
+        # 한 사례는 총 91개의 값으로 구성
+        if len(tokens) % 91 != 0:
             raise ValueError(
-                f"예상한 열 개수는 91개이지만 "
-                f"실제 열 개수는 {raw.shape[1]}개입니다."
+                f"데이터 값의 개수가 91의 배수가 아닙니다. "
+                f"전체 값 개수: {len(tokens)}"
             )
 
-        # 원본 순서는 시점별로 6개 센서가 반복됨
+        # 91개씩 묶어서 하나의 사례로 구성
+        records = [
+            tokens[i:i + 91]
+            for i in range(0, len(tokens), 91)
+        ]
+
+        # 원본 데이터의 열 순서
+        # Class, Fx1, Fy1, Fz1, Tx1, Ty1, Tz1, ...
         original_columns = ["Class"]
 
         for i in range(1, 16):
             for sensor in SENSORS:
                 original_columns.append(f"{sensor}{i}")
 
-        raw.columns = original_columns
+        raw = pd.DataFrame(
+            records,
+            columns=original_columns
+        )
 
         # 센서별 순서로 열 재배열
         df = raw[ALL_COLUMNS].copy()
 
-        # Class는 원본 값 그대로 보존
-        # 나머지 센서값은 숫자형으로 변환
+        # 센서 측정값을 숫자형으로 변환
         for col in FEATURE_COLUMNS:
             df[col] = pd.to_numeric(
                 df[col],
@@ -82,8 +87,6 @@ def load_data():
         if df.empty:
             raise ValueError("사용할 수 있는 데이터가 없습니다.")
 
-        # 센서 데이터에 결측치가 있는지 확인
-        # 임의로 값을 채우지 않고 원본 상태를 유지
         return df
 
     except requests.exceptions.RequestException as e:
@@ -214,8 +217,10 @@ def prepare_app():
 
     except Exception as e:
         st.error(str(e))
+
         st.info(
             "UCI 공식 데이터셋의 LP1 파일을 "
-            "다운로드할 수 있는지 확인해 주세요."
+            "다운로드하고 데이터 형식을 확인해 주세요."
         )
+
         return None
